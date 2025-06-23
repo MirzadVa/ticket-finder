@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cheap Flight Deals</title>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #f4f4f4;
+        padding: 20px;
+        color: #333;
+      }
+      .container {
+        max-width: 700px;
+        margin: 0 auto;
+        background-color: #fff;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        padding: 20px;
+      }
+      h1 {
+        color: #d9534f;
+        text-align: center;
+        margin-bottom: 30px;
+      }
+      h2 {
+        color: #5bc0de;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 5px;
+      }
+      ul {
+        list-style-type: none;
+        padding: 0;
+      }
+      li {
+        background: #f9f9f9;
+        margin: 10px 0;
+        padding: 10px 15px;
+        border-left: 4px solid #5cb85c;
+        border-radius: 4px;
+        transition: background-color 0.2s ease;
+      }
+      li:hover {
+        background-color: #f1f1f1;
+      }
+      .cheapest {
+        font-weight: bold;
+        color: #5cb85c; /* Green */
+        border-left-color: #5cb85c;
+      }
+      .footer {
+        margin-top: 40px;
+        text-align: center;
+        font-size: 0.9em;
+        color: #999;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>📢 Cheap Pegasus Flights Under 45 EUR</h1>
+      {{FLIGHT_CONTENT}}
+      <div class="footer">
+        Sent automatically by your Pegasus flight tracker 🛫
+      </div>
+    </div>
+  </body>
+</html>
