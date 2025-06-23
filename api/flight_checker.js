@@ -1,130 +1,186 @@
-const axios = require("axios");
-const sgMail = require("@sendgrid/mail");
-require("dotenv").config();
+import axios from "axios";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import sgMail from "@sendgrid/mail";
+
+// Load environment variables (only locally)
+if (process.env.NODE_ENV !== "production") {
+  const dotenv = await import("dotenv");
+  dotenv.config();
+}
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-const FLIGHT_API_URL =
-  "https://www.flypgs.com/apint/cheapfare/flight-calender-prices";
-const EXCHANGE_API = "https://api.frankfurter.app/latest?from=EUR&to=TRY";
+const COOKIE = process.env.COOKIE;
+const SENDER_EMAIL = process.env.SENDER_EMAIL;
+const RECIPIENT_EMAILS = process.env.RECIPIENT_EMAILS.split(",");
+const TEMPLATE_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../template.html"
+);
+const DATA_FILE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../data.json"
+);
 
-module.exports = async (req, res) => {
+const headers = {
+  "Content-Type": "application/json",
+  "User-Agent": "Mozilla/5.0",
+  Origin: "https://www.flypgs.com",
+  Referer: "https://www.flypgs.com/",
+  Accept: "application/json, text/plain, */*",
+};
+
+const data = {
+  depPort: "SJJ",
+  arrPort: "SAW",
+  flightDate: new Date().toISOString().split("T")[0],
+  currency: "EUR",
+};
+
+const convertToTRY = async (eurAmount) => {
   try {
-    const today = new Date().toISOString().split("T")[0];
+    const res = await axios.get(
+      "https://api.frankfurter.app/latest?from=EUR&to=TRY"
+    );
+    const rate = res.data.rates.TRY;
+    return (eurAmount * rate).toFixed(2);
+  } catch (error) {
+    console.error("Currency conversion failed:", error.message);
+    return null;
+  }
+};
 
-    const headers = {
-      "Content-Type": "application/json",
-      Cookie: process.env.COOKIE,
-      "User-Agent": "Mozilla/5.0",
-      Origin: "https://www.flypgs.com",
-      Referer: "https://www.flypgs.com/",
-      Accept: "application/json, text/plain, */*",
-    };
+function groupByMonth(flights) {
+  const grouped = {};
+  const monthOrder = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
 
-    const body = {
-      depPort: "SJJ",
-      arrPort: "SAW",
-      flightDate: today,
-      currency: "EUR",
-    };
+  flights.forEach((flight) => {
+    const date = new Date(flight.date);
+    const month = monthOrder[date.getMonth()];
+    if (!grouped[month]) grouped[month] = [];
+    grouped[month].push(flight);
+  });
 
-    const [flightRes, exchangeRes] = await Promise.all([
-      axios.post(FLIGHT_API_URL, body, { headers }),
-      axios.get(EXCHANGE_API),
-    ]);
+  // Sort months in correct order
+  const ordered = {};
+  monthOrder.forEach((m) => {
+    if (grouped[m]) ordered[m] = grouped[m];
+  });
 
-    const rate = exchangeRes.data.rates.TRY || 30;
-    const data = flightRes.data;
+  return ordered;
+}
 
-    if (!data.cheapFareFlightCalenderModelList) {
-      console.log("No valid flight data found.");
-      return res.status(200).send("No flight data available.");
-    }
+function loadPreviousData() {
+  try {
+    const content = fs.readFileSync(DATA_FILE, "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return [];
+  }
+}
 
-    const flights = [];
+function saveData(flights) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(flights, null, 2), "utf-8");
+}
 
-    for (const month of data.cheapFareFlightCalenderModelList) {
+function flightsChanged(newData, oldData) {
+  return JSON.stringify(newData) !== JSON.stringify(oldData);
+}
+
+function formatHTML(flightsGrouped) {
+  let html = "";
+  for (const [month, flights] of Object.entries(flightsGrouped)) {
+    html += `<h2>🗓️ ${month}</h2><ul>`;
+    flights.forEach((f) => {
+      const style = f.price < 40 ? "cheapest" : "";
+      html += `<li class="${style}">${f.date} &rarr; ${f.price} EUR (${f.priceTRY} TRY) (${f.from} &rarr; ${f.to})</li>`;
+    });
+    html += `</ul>`;
+  }
+  return html;
+}
+
+async function fetchFlights() {
+  try {
+    const res = await axios.post(
+      "https://www.flypgs.com/apint/cheapfare/flight-calender-prices",
+      data,
+      { headers }
+    );
+    const calendar = res.data.cheapFareFlightCalenderModelList;
+    if (!calendar || !Array.isArray(calendar))
+      throw new Error("Invalid response structure.");
+
+    const allFlights = [];
+    for (const month of calendar) {
       const validDays = month.days.filter(
-        (d) => d.availFlightMessage !== "NO_FARE" && d.cheapFare.amount > 0
+        (d) =>
+          d.availFlightMessage !== "NO_FARE" &&
+          d.cheapFare.amount > 0 &&
+          d.cheapFare.amount <= 45
       );
-
       for (const day of validDays) {
-        const price = parseFloat(day.cheapFare.amount.toFixed(2));
-        if (price <= 45) {
-          flights.push({
-            date: day.flightDate,
-            price,
-            priceInTry: (price * rate).toFixed(2),
-            currency: day.cheapFare.currency,
-            from: month.depPort,
-            to: month.arrPort,
-          });
-        }
+        const priceTRY = await convertToTRY(day.cheapFare.amount);
+        allFlights.push({
+          date: day.flightDate,
+          price: day.cheapFare.amount,
+          priceTRY,
+          from: month.depPort,
+          to: month.arrPort,
+        });
       }
     }
 
-    if (flights.length === 0) {
-      console.log("No cheap flights found.");
-      return res.status(200).send("No cheap flights under 45 EUR found.");
-    }
-
-    // Group by month name
-    const grouped = {};
-    for (const f of flights) {
-      const monthName = new Date(f.date).toLocaleString("en-US", {
-        month: "long",
-      });
-      if (!grouped[monthName]) grouped[monthName] = [];
-      grouped[monthName].push(f);
-    }
-
-    const monthOrder = {
-      January: 1,
-      February: 2,
-      March: 3,
-      April: 4,
-      May: 5,
-      June: 6,
-      July: 7,
-      August: 8,
-      September: 9,
-      October: 10,
-      November: 11,
-      December: 12,
-    };
-
-    const sortedMonthNames = Object.keys(grouped).sort(
-      (a, b) => monthOrder[a] - monthOrder[b]
-    );
-
-    let html = "";
-    for (const month of sortedMonthNames) {
-      const flights = grouped[month];
-      html += `<h2>📅 ${month}</h2><ul>`;
-      flights.forEach((flight) => {
-        const isCheapest = flight.price < 40;
-        const liClass = isCheapest ? ' class="cheapest"' : "";
-        html += `<li${liClass}>${flight.date} → ${flight.price} EUR (${flight.priceInTry} TRY) (${flight.from} → ${flight.to})</li>`;
-      });
-      html += "</ul>";
-    }
-
-    const fs = require("fs");
-    const template = fs.readFileSync("./template.html", "utf8");
-    const htmlBody = template.replace("{{FLIGHT_CONTENT}}", html);
-
-    const msg = {
-      to: process.env.RECIPIENT_EMAILS.split(","),
-      from: process.env.SENDER_EMAIL,
-      subject: "🛫 Cheap Pegasus Flights Under 45 EUR",
-      html: htmlBody,
-    };
-
-    await sgMail.send(msg);
-    console.log("✅ Email sent");
-    res.status(200).send("Email sent successfully");
+    allFlights.sort((a, b) => a.price - b.price);
+    return allFlights;
   } catch (err) {
-    console.error("❌ Error:", err);
-    res.status(500).send("Internal Server Error");
+    console.error("❌ Error:", err.message);
+    return [];
   }
-};
+}
+
+async function sendEmail(htmlContent) {
+  const template = fs.readFileSync(TEMPLATE_PATH, "utf-8");
+  const finalHtml = template.replace("{{FLIGHT_CONTENT}}", htmlContent);
+
+  const msg = {
+    to: RECIPIENT_EMAILS,
+    from: SENDER_EMAIL,
+    subject: "Pegasus Flights Under 45 EUR",
+    html: finalHtml,
+  };
+
+  await sgMail.sendMultiple(msg);
+  console.log("📧 Email sent to:", RECIPIENT_EMAILS.join(", "));
+}
+
+(async () => {
+  const current = await fetchFlights();
+  const previous = loadPreviousData();
+
+  const grouped = groupByMonth(current);
+  const html = formatHTML(grouped);
+
+  console.log("--- Flights ---");
+  console.log(html.replace(/<[^>]*>/g, "")); // log as plain text
+
+  if (flightsChanged(current, previous)) {
+    await sendEmail(html);
+    saveData(current);
+  }
+})();
