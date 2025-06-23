@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "api/flight-checker.js": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "cron": [
+    {
+      "path": "/api/flight-checker",
+      "schedule": "*/10 * * * *"
+    }
+  ]
+}
